@@ -1,0 +1,70 @@
+services:
+  # BANCO 1: Exclusivo para a Evolution API (Porta padrão 5432)
+  db-smile:
+    image: postgres:15
+    container_name: db-smile
+    restart: always
+    environment:
+      POSTGRES_USER: admin_smile
+      POSTGRES_PASSWORD: 341620Cbp2026
+      POSTGRES_DB: evolution_db
+    volumes:
+      - postgres-data-evo:/var/lib/postgresql/data
+
+  # BANCO 2: Exclusivo para o seu Bot Igor V5 (Porta 5433)
+  db-bot:
+    image: postgres:15
+    container_name: db-bot
+    restart: always
+    ports:
+      - "5433:5432" # Mapeia a porta 5433 do Windows para a 5432 do container
+    environment:
+      POSTGRES_USER: dev_rayssa
+      POSTGRES_PASSWORD: smile_password_123
+      POSTGRES_DB: bot_db
+    volumes:
+      - postgres-data-bot:/var/lib/postgresql/data
+
+  # CACHE: Redis para a Evolution
+  redis-smile:
+    image: redis:7
+    container_name: redis-smile
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # API: Evolution API configurada para o banco 1
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    container_name: evolution-api-smile
+    restart: always
+    ports:
+      - "8081:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Garante que o container enxergue o Windows
+    environment:
+      SERVER_PORT: 8080
+      AUTHENTICATION_API_KEY: mCurtlQa9HRTL8jjzyQOo5NzwXBAnnkE
+      DATABASE_PROVIDER: postgresql
+      DATABASE_ENABLED: "true"
+      DATABASE_CONNECTION_URI: postgresql://admin_smile:341620Cbp2026@db-smile:5432/evolution_db?schema=public
+      DATABASE_URL: postgresql://admin_smile:341620Cbp2026@db-smile:5432/evolution_db?schema=public
+      REDIS_URI: redis://redis-smile:6379
+      CACHE_REDIS_URI: redis://redis-smile:6379
+      QUEUE_REDIS_URI: redis://redis-smile:6379
+      STORE_MESSAGES: "true"
+      STORE_CONTACTS: "true"
+      LOG_LEVEL: DEBUG
+
+      # 🟢 ATIVAÇÃO E NORMALIZAÇÃO DO WEBHOOK GLOBAL
+      WEBHOOK_GLOBAL_ENABLED: "true"
+      WEBHOOK_GLOBAL_URL: "http://host.docker.internal:3001/webhook/whatsapp"
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      
+    depends_on:
+      - db-smile
+      - redis-smile
+
+volumes:
+  postgres-data-evo:
+  postgres-data-bot:

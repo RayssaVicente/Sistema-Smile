@@ -1,0 +1,1 @@
+CREATE DATABASE bot_db; -- Este banco será exclusivo do Prisma/Bot

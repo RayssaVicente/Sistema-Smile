@@ -1,0 +1,37 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Patient {
+  id            String        @id @default(uuid())
+  phone         String        @unique
+  name          String?       // Mantido opcional para compatibilidade
+  status        String        @default("AWAITING_NAME") // Controla o fluxo rígido: AWAITING_NAME, AWAITING_PROCEDURE, AWAITING_DATE, CONCLUDED
+  tempProcedure String?       // Guarda temporariamente o procedimento escolhido no menu
+  createdAt     DateTime      @default(now())
+  messages      Message[]
+  appointments  Appointment[]
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  role      String   // 'user' ou 'assistant'
+  content   String
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Appointment {
+  id        String   @id @default(uuid())
+  date      DateTime
+  status    String   @default("pending") // pending, confirmed, canceled
+  procedure String   @default("Consulta Geral") // Novo campo para salvar o procedimento exato escolhido pelo paciente
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id])
+}

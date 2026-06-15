@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "bullmq": "^5.76.10",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}

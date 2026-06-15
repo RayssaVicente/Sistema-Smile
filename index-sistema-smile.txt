@@ -1,0 +1,171 @@
+import Fastify from 'fastify';
+import dotenv from 'dotenv';
+dotenv.config();
+
+import axios from 'axios';
+import Groq from 'groq-sdk';
+import fs from 'fs';
+import path from 'path';
+import FormData from 'form-data';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+
+import { PrismaClient } from '@prisma/client';
+import { SYSTEM_PROMPT } from './lib/prompt.js';
+import { getChatHistory, saveChatMessage } from './lib/memory.js';
+
+// 1. INSTANCIAR O PRISMA (Garante conexão na 5433 via .env)
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL
+    },
+  },
+});
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+const app = Fastify();
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+/* =========================================================
+   FUNÇÕES AUXILIARES (Áudio e Agendamento)
+========================================================= */
+
+// Função para extrair intenção e salvar no banco [Ref: image_39553e.png]
+async function handleAppointment(responseText: string, patientId: string) {
+    const text = responseText.toLowerCase();
+    
+    // Verifica se a IA confirmou o agendamento no texto
+    if (text.includes("confirmei") || text.includes("agendada") || text.includes("marcada")) {
+        try {
+            await prisma.appointment.create({
+                data: {
+                    patientId: patientId,
+                    date: new Date(), // Em produção, usaríamos uma lib como 'chrono-node' para extrair a data real
+                    status: "confirmed"
+                }
+            });
+            console.log(`📅 Agendamento registrado para o paciente ${patientId}`);
+        } catch (error) {
+            console.error("❌ Erro ao criar Appointment:", error);
+        }
+    }
+}
+
+const convertAudio = (inputPath: string, outputPath: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath).audioCodec('libmp3lame').toFormat('mp3')
+      .on('error', (err) => reject(err))
+      .on('end', () => resolve())
+      .save(outputPath);
+  });
+};
+
+async function getAudioBase64(messageId: string) {
+  try {
+    const response = await axios.post(
+      `${process.env.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/${process.env.INSTANCE_NAME}`,
+      { message: { key: { id: messageId } } },
+      { headers: { apikey: process.env.EVOLUTION_API_KEY || '' } }
+    );
+    return response.data?.base64 || '';
+  } catch (error) { return ''; }
+}
+
+async function transcribeAudio(base64Audio: string) {
+  const timestamp = Date.now();
+  const tempFile = path.join(process.cwd(), `temp_${timestamp}.opus`);
+  const convertedFile = path.join(process.cwd(), `ready_${timestamp}.mp3`);
+  try {
+    const audioBuffer = Buffer.from(base64Audio.replace(/^data:audio\/\w+;base64,/, ''), 'base64');
+    fs.writeFileSync(tempFile, audioBuffer);
+    await convertAudio(tempFile, convertedFile);
+    const form = new FormData();
+    form.append('file', fs.createReadStream(convertedFile), { filename: 'audio.mp3', contentType: 'audio/mp3' });
+    form.append('model', 'whisper-large-v3');
+    const transcription = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+        headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.GROQ_API_KEY}` }
+    });
+    return transcription.data.text || '';
+  } catch (error) { return ''; }
+  finally {
+    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    if (fs.existsSync(convertedFile)) fs.unlinkSync(convertedFile);
+  }
+}
+
+/* =========================================================
+   WEBHOOK PRINCIPAL
+========================================================= */
+app.post('/webhook/whatsapp', async (request, reply) => {
+    const payload = request.body as any;
+    const data = payload?.data;
+
+    if (!data?.key || data.key.fromMe || !data.key.remoteJid) {
+        return reply.send({ status: 'IGNORED' });
+    }
+
+    const remoteJid: string = data.key.remoteJid;
+    const cleanNumber = remoteJid.split('@')[0].replace(/\D/g, '');
+
+    try {
+        let messageText = data.message?.conversation || data.message?.extendedTextMessage?.text || '';
+
+        if (data.message?.audioMessage) {
+            const audioBase64 = await getAudioBase64(data.key.id);
+            if (audioBase64) messageText = await transcribeAudio(audioBase64);
+        }
+
+        if (!messageText) return reply.send({ status: 'EMPTY' });
+
+        // 1. UPSERT PACIENTE
+        const patient = await prisma.patient.upsert({
+            where: { phone: cleanNumber },
+            update: { name: "Rayssa Vicente" }, // Atualiza com o nome real se disponível
+            create: { phone: cleanNumber, name: "Paciente Clínica Smile" }
+        });
+
+        // 2. SALVAR MENSAGEM DO USUÁRIO
+        await prisma.message.create({
+            data: { role: 'user', content: messageText, patientId: patient.id }
+        });
+
+        const history = await getChatHistory(remoteJid);
+
+        // 3. GERAR RESPOSTA DA IA
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history, { role: 'user', content: messageText }],
+            model: 'llama-3.3-70b-versatile'
+        });
+
+        const responseText = completion.choices[0]?.message?.content || '';
+
+        // 4. SALVAR RESPOSTA DA IA E VERIFICAR AGENDAMENTO
+        await prisma.message.create({
+            data: { role: 'assistant', content: responseText, patientId: patient.id }
+        });
+
+        // Chama a função para persistir o Appointment se a IA confirmou
+        await handleAppointment(responseText, patient.id);
+
+        await saveChatMessage(remoteJid, 'user', messageText);
+        await saveChatMessage(remoteJid, 'assistant', responseText);
+
+        // 5. ENVIAR PARA WHATSAPP
+        await axios.post(
+            `${process.env.EVOLUTION_API_URL}/message/sendText/${process.env.INSTANCE_NAME}`,
+            { number: cleanNumber, text: responseText },
+            { headers: { apikey: process.env.EVOLUTION_API_KEY || '' } }
+        );
+
+        return reply.send({ status: 'SUCCESS' });
+    } catch (err: any) {
+        console.error('❌ Erro no Webhook:', err.message);
+        return reply.status(500).send({ status: 'ERROR' });
+    }
+});
+
+const PORT = Number(process.env.PORT) || 3001;
+app.listen({ port: PORT, host: '0.0.0.0' }).then(() => {
+    console.log(`🚀 Igor V5 Online | Porta ${PORT}`);
+});
