@@ -30,8 +30,52 @@ model Message {
 model Appointment {
   id        String   @id @default(uuid())
   date      DateTime
-  status    String   @default("pending") // pending, confirmed, canceled
-  procedure String   @default("Consulta Geral") // Novo campo para salvar o procedimento exato escolhido pelo paciente
+  status    String   @default("pending") // Valores: pending, confirmed, canceled, CONCLUIDO
+  procedure String   @default("Consulta Geral")
   patientId String
   patient   Patient  @relation(fields: [patientId], references: [id])
+  linkSent  Boolean  @default(false)      // NOVO: Controle de envio
+}
+
+model Informacao {
+  id              Int      @id @default(autoincrement())
+  botNumber       String?  // Número do bot
+  assistantNumber String?  // Número da assistente humana
+  evaluationLink  String?  // Link de avaliação
+  botPrompt       String?  // Instruções / "pegada" do bot (Armazenará o SYSTEM_PROMPT)
+  updatedAt       DateTime @updatedAt
+}
+
+// NOVO: Tabela para gerenciar as categorias e os vídeos dinamicamente
+model VideoCategory {
+  id          Int      @id @default(autoincrement())
+  categoryKey String   @unique // Ex: "SUBMENU_ESTETICA", "SUBMENU_IMPLANTES"
+  title       String   // Ex: "Estética"
+  videos      Video[]
+}
+
+model Video {
+  id              Int           @id @default(autoincrement())
+  code            String        // Ex: "b1", "i1", "g1"
+  url             String        // Link do Google Drive / externo
+  caption         String        // Legenda / Descrição do vídeo
+  videoCategoryId Int
+  category        VideoCategory @relation(fields: [videoCategoryId], references: [id], onDelete: Cascade)
+}
+
+model Feedback {
+  id         Int      @id @default(autoincrement())
+  telefone   String
+  nome       String
+  nota       Int
+  comentario String?
+  criadoEm   DateTime @default(now())
+}
+
+model SystemConfig {
+  id              String   @id @default("config_unico")
+  botNumber       String   // Novo: Número do Bot que dispara as mensagens
+  assistantNumber String   // Número da Assistente / Atendente humana
+  evaluationLink  String   // Link de Avaliação do Google
+  updatedAt       DateTime @updatedAt
 }
