@@ -1,11 +1,16 @@
-import { Queue } from 'bullmq';
-import { connection } from '../lib/redis.js';
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 
-export const videoQueue = new Queue('VideoDelivery', { connection });
+// Busca uma categoria específica com seus vídeos e já monta o objeto para o bot
+export async function getVideosByCategoryKey(categoryKey: string) {
+  const category = await prisma.videoCategory.findUnique({
+    where: { categoryKey },
+    include: { videos: true }
+  });
 
-export async function scheduleVideo(patientId: string, videoUrl: string, delayMs: number) {
-  await videoQueue.add('sendVideo', 
-    { patientId, videoUrl }, 
-    { delay: delayMs }
-  );
+  if (!category || category.videos.length === 0) {
+    return null;
+  }
+
+  return category;
 }
