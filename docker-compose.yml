@@ -58,7 +58,8 @@ services:
 
       # 🟢 ATIVAÇÃO E NORMALIZAÇÃO DO WEBHOOK GLOBAL
       WEBHOOK_GLOBAL_ENABLED: "true"
-      WEBHOOK_GLOBAL_URL: "http://host.docker.internal:3001/webhook/whatsapp"
+      # Mude de 3001 para 8010
+      WEBHOOK_GLOBAL_URL: "http://host.docker.internal:8010/webhook/whatsapp"
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
       
     depends_on:
